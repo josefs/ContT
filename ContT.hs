@@ -33,6 +33,15 @@ runWriterCT (Cont f) = Cont $ \k -> f (\a w -> k (a,w)) mempty
 tellCT :: Monoid w => w -> Cont (Write w r) ()
 tellCT w = Cont $ \k w' -> k () (w' <> w)
 
+-- Less useful in this library as it uses a monoid to concatenate
+-- results. If the programmer where to just replace the result then
+-- this function would be much more powerful.
+collectCT :: Cont (Write w r) w
+collectCT = Cont $ \k w -> k w w
+
+censorCT :: (w -> w) -> Cont (Write w r) a -> Cont (Write w r) a
+censorCT c (Cont f) = Cont $ \k w -> f (\a w' -> k a (c w)) w
+
 getCT :: Cont (State s r) s
 getCT = Cont $ \k s -> k s s
 
