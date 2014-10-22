@@ -39,9 +39,6 @@ tellCT w = Cont $ \k w' -> k () (w' <> w)
 collectCT :: Cont (Write w r) w
 collectCT = Cont $ \k w -> k w w
 
-censorCT :: (w -> w) -> Cont (Write w r) a -> Cont (Write w r) a
-censorCT c (Cont f) = Cont $ \k w -> f (\a w' -> k a (c w)) w
-
 getCT :: Cont (State s r) s
 getCT = Cont $ \k s -> k s s
 
@@ -69,11 +66,11 @@ runError (Cont f) = Cont $ \k -> f (\a k' -> k (Right a)) (\e -> k (Left e))
 envCT :: Cont (Reader e r) e
 envCT = Cont $ \k r -> k r r
 
-local :: e -> Cont (Reader e r) a -> Cont (Reader e r) a
-local e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') e
+localCT :: e -> Cont (Reader e r) a -> Cont (Reader e r) a
+localCT e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') e
 
-runReader :: Cont (Reader e r) a -> e -> Cont r a
-runReader (Cont f) e = Cont $ \k -> f (\a _ -> k a) e
+runReaderCT :: Cont (Reader e r) a -> e -> Cont r a
+runReaderCT (Cont f) e = Cont $ \k -> f (\a _ -> k a) e
 
 -- This function can lift any operation through any effect which
 -- is of the form (e -> r).
@@ -102,11 +99,18 @@ testCT = flip runCont id $ flip runStateCT 1 $ runError $
 
 testTell = flip runCont id $ runWriterCT $ tellCT "foo" >> tellCT "bar"
 
-testEnv = flip runCont id $ flip runReader 1 envCT
-testLocal = flip runCont id $ flip runReader 1 $
-            local 10 envCT
+testEnv = flip runCont id $ flip runReaderCT 1 envCT
+testLocal = flip runCont id $ flip runReaderCT 1 $
+            localCT 10 envCT
 
 --------------------------------------------------
+
+-- Example of type unsafety:
+
+unsafe = flip runCont id $ runWriterCT $
+         do tellCT "foo"
+            setCT "bar"
+            envCT
 
 -- I should be able to overload the operations by
 -- using an identity newtype on the parameter
@@ -117,3 +121,57 @@ type Reader' e r = ReaderT e -> r
 newtype StateT s = StateT { getS :: s }
 type State' s r = StateT s -> r
 
+newtype WriterT w = WriterT { getW :: w }
+type Writer' w r = WriterT w -> r
+
+newtype ErrorT e = ErrorT { getE :: e }
+type Error' e r = (ErrorT e -> r) -> r
+
+tell :: Monoid w => w -> Cont (Writer' w r) ()
+tell w = Cont $ \k w' -> k () (WriterT $ getW w' <> w)
+
+collect :: Cont (Writer' w r) w
+collect = Cont $ \k w -> k (getW w) w
+
+runWriter :: Monoid w => Cont (Writer' w r) a -> Cont r (a,w)
+runWriter (Cont f) = Cont $ \k -> f (\a w -> k (a,getW w)) (WriterT mempty)
+
+get :: Cont (State' s r) s
+get = Cont $ \k s -> k (getS s) s
+
+set :: s -> Cont (State' s r) s
+set s = Cont $ \k s' -> k (getS s') (StateT s)
+
+runState :: Cont (State' s r) a -> s -> Cont r (a,s)
+runState (Cont f) s = Cont $ \k -> f (\a s -> k (a,getS s)) (StateT s)
+
+env :: Cont (Reader' e r) e
+env = Cont $ \k r -> k (getR r) r
+
+local :: e -> Cont (Reader' e r) a -> Cont (Reader e r) a
+local e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') (ReaderT e)
+
+runReader :: Cont (Reader' e r) a -> e -> Cont r a
+runReader (Cont f) e = Cont $ \k -> f (\a _ -> k a) (ReaderT e)
+
+throw :: e -> Cont (Error' e r) a
+throw e = Cont $ \k k' -> k' (ErrorT e)
+
+catch :: Cont (Error' e r) a -> (e -> Cont (Error' e r) a) -> Cont (Error' e r) a
+catch (Cont f) h = Cont $ \k k' -> f k (\e -> runCont (h (getE e)) k k')
+
+-- It's really sad that I have to go back and forth between errors.
+-- This is not required in mtl, where there is only a function (e -> e')
+-- Maybe if I could come up with a simpler error effect I could have a simpler type
+withError' :: (e -> e') -> (e' -> e) -> Cont (Error' e r) a -> Cont (Error' e' r) a
+withError' t d (Cont f) = Cont $ \k k' -> f (\a k'' -> k a (\e -> k'' (ErrorT (d (getE e))))) (\e -> k' (ErrorT (t (getE e))))
+
+runError' :: Cont (Error' e r) a -> Cont r (Either e a)
+runError' (Cont f) = Cont $ \k -> f (\a k' -> k (Right a)) (\e -> k (Left (getE e)))
+
+{- This now doesn't type check. Success!
+unsafe' = flip runCont id $ runWriter $
+          do tell "foo"
+             set "bar"
+             env
+-}

@@ -52,6 +52,23 @@ What about continuation effect?
 
 # More type safety
 
+The library presented in the previous section suffers from some type 
+
+The effects state, reader and writer all look the same from the view
+of the type system. That means that we can write programs like the
+following which confuse the effects.
+
+~~~ {.haskell}
+unsafe = flip runCont id $ runWriter $
+         do tell "foo"
+            set "bar"
+            env
+~~~
+
+The same effect is used as a writer effect, a state effect and a
+reader effect. We would like to be able to rule out these kinds of
+programs, hopefully without paying any performance penalty.
+
 ## A first attempt
 
 ~~~ {.haskell}
