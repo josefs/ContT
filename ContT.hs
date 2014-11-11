@@ -1,3 +1,12 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE RankNTypes #-}
 module ContT where
 
 import Control.Applicative
@@ -20,12 +29,18 @@ instance Applicative (Cont r) where
   pure = return
   (<*>) = ap
 
+callCC :: ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC f = Cont $ \k -> runCont (f (\a -> Cont $ \_ -> k a)) k
+
 -- Transformers
 
 type Write w r = w -> r
 type State s r = s -> r
 type Reader e r = e -> r
 type Error e r = (e -> r) -> r
+type Kont a r = (a -> r) -> r
+
+type Logic r = r -> r
 
 runWriterCT :: Monoid w => Cont (Write w r) a -> Cont r (a,w)
 runWriterCT (Cont f) = Cont $ \k -> f (\a w -> k (a,w)) mempty
@@ -72,12 +87,153 @@ localCT e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') e
 runReaderCT :: Cont (Reader e r) a -> e -> Cont r a
 runReaderCT (Cont f) e = Cont $ \k -> f (\a _ -> k a) e
 
+callCCk :: ((a -> Cont (Kont b r) b) -> Cont (Kont a r) a) -> Cont (Kont a r) a
+callCCk = undefined
+--callCCk f = Cont $ \k k' -> f (\a -> k' a) k'
+{-
+callCC :: ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC f = Cont $ \k -> runCont (f (\a -> Cont $ \_ -> k a)) k
+
+-}
 -- This function can lift any operation through any effect which
 -- is of the form (e -> r).
 -- The question is, can all effects be written on this form?
 liftCT :: Cont r a -> Cont (e -> r) a
 liftCT (Cont f) = Cont $ \k e -> f (\a -> k a e)
 
+-- Logic
+
+observe :: Cont (Logic r) a -> Cont r a
+observe (Cont f) = Cont $ \k -> f (const . k) (error "No answer.")
+
+--observeAll :: Cont (Logic r) a -> Cont r [a]
+--observeAll (Cont f) = Cont $ \k -> f (\a r -> k [a]) (k [])
+
+empty :: Cont (Logic r) a
+empty = Cont $ \_ fk -> fk
+
+(<|>) :: Cont (Logic r) a -> Cont (Logic r) a -> Cont (Logic r) a
+Cont f1 <|> Cont f2 = Cont $ \sk fk -> f1 sk (f2 sk fk)
+
+msplit :: Cont (Logic r) a -> Cont (Logic r) (Maybe (a,Cont (Logic r) a))
+msplit (Cont f) = Cont $ \sk fk ->
+                    f (\a fk' -> sk (Just (a,Cont $ \_ _ -> f (\_ r -> r) fk')) fk)
+                      (sk Nothing fk)
+{-
+
+Prove msplit laws
+
+msplit mzero = return Nothing
+msplit (return a ‘mplus‘ m) = return (Just (a, m))
+
+1)
+msplit mzero =
+msplit (Cont (\_ fk -> fk)) =
+Cont $ \sk fk -> (\_ fk' -> fk') (\a fk -> ...) (sk Nothing fk) =
+Cont $ \sk fk -> sk Nothing fk
+
+return Nothing =
+Cont $ \sk -> sk Nothing
+
+2) -- fails pretty badly so far
+msplit (return a <|> m) = { return }
+msplit ((Cont (\sk fk -> sk a fk)) <|> (Cont f)) = { (<|>) }
+msplit (Cont $ \skp fkp -> (\sk fk -> sk a fk) skp (f skp fkp)) =
+msplit (Cont $ \skp fkp -> skp a (f skp fkp)) = { msplit }
+Cont $ \sk fk -> (\skp fkp -> skp a (f skp fkp))
+                    (\b fk' -> sk (Just (b,Cont $ \_ _ -> fk')) fk)
+                    (sk Nothing fk) =
+Cont $ \sk fk -> (\b fk' -> sk (Just (b,Cont $ \_ _ -> fk')) fk) a
+  (f (\b fk' -> sk (Just (b,Cont $ \_ _ -> fk')) fk) (sk Nothing fk)) =
+Cont $ \sk fk -> sk (Just (a,Cont $ \_ _ -> fk')) fk
+  where fk' = f (\b fk' -> sk (Just (b,Cont $ \_ _ -> fk')) fk) (sk Nothing fk)
+
+return (Just (a,m)) = Cont $ \sk -> sk (Just (a,m))
+
+-}
+
+reflect :: Maybe (a,Cont (Logic r) a) -> Cont (Logic r) a
+reflect Nothing = ContT.empty
+reflect (Just (a,m)) = return a ContT.<|> m
+
+{-
+newtype LogicT r = LogicT{ unLogicT :: forall b. Cont r b -> Cont r b }
+
+This type can never work because it gets the forall quantifier in the
+wrong place. The continuation type becomes like this:
+
+(a -> (forall b . Cont r b -> Cont r b)) -> (forall b. Cont r b -> Cont r b)
+
+But we wanted :
+
+forall b . (a -> (Cont r b -> Cont r b)) -> (Cont r b -> Cont r b)
+
+
+failL :: LogicT r
+failL = LogicT (\fk -> fk)
+
+composeL :: (t -> LogicT r) -> (t -> LogicT r) -> t -> LogicT r
+composeL f1 f2 sk = LogicT (\fk -> unLogicT (f1 sk) (unLogicT (f2 sk) fk))
+
+emptyT :: Cont (LogicT r) a
+emptyT = Cont $ \_ -> failL
+
+(<+>) :: Cont (LogicT r) a -> Cont (LogicT r) a -> Cont (LogicT r) a
+Cont f1 <+> Cont f2 = Cont (composeL f1 f2)
+
+liftL :: Cont r a -> Cont (LogicT r) a
+liftL (Cont f) = Cont $ \sk -> LogicT (\fk -> Cont (\k -> f (\a -> runCont (unLogicT (sk a) fk) k)))
+
+msplitT :: Cont (LogicT r) a -> Cont (LogicT r) (Maybe (a,Cont (LogicT r) a))
+msplitT (Cont m) = liftL $ unLogicT (m ssk) (return Nothing)
+  where ssk a = LogicT (\fk -> return (Just a, liftL fk >>= reflectL))
+
+reflectL :: Maybe (a,Cont (LogicT r) a) -> Cont (LogicT r) a
+reflectL Nothing = emptyT
+reflectL (Just (a,m)) = return a <+> m
+-}
+
+type LogicT r' r = Cont r r' -> Cont r r'
+
+emptyT :: Cont (LogicT r' r) a
+emptyT = Cont $ \_ fk -> fk
+
+(<+>) :: Cont (LogicT r' r) a -> Cont (LogicT r' r) a -> Cont (LogicT r' r) a
+Cont m <+> Cont n = Cont $ \sk fk -> m sk (n sk fk)
+
+reflectT :: Maybe (a, Cont (LogicT r' r) a) -> Cont (LogicT r' r) a
+reflectT Nothing = emptyT
+reflectT (Just (a,m)) = return a <+> m
+
+liftL :: Cont r a -> Cont (LogicT r r) a
+liftL (Cont f) = Cont $ \sk fk -> return (f (\a -> runCont (sk a fk) id))
+
+msplitL :: Cont (LogicT (Maybe (a,Cont (LogicT r r) a)) r) a ->
+           Cont (LogicT r r) (Maybe (a,Cont (LogicT r r) a))
+msplitL (Cont m) = liftL $ m ssk (return Nothing)
+  where ssk a fk = return $ Just (a, (liftL fk >>= reflect))
+
+{-
+    msplit m = lift $ unLogicT m ssk (return Nothing)
+     where
+     ssk a fk = return $ Just (a, (lift fk >>= reflect))
+-}
+
+observeT :: Cont (LogicT r r) a -> Cont r a
+observeT (Cont m) = Cont $ \k -> runCont (m (\a fk -> return (k a)) (fail "No answer.")) id
+
+observeAllT :: Cont (LogicT [a] r) a -> Cont r [a]
+observeAllT (Cont m) = Cont $ \k ->
+  runCont (m (\a fk -> fmap (a:) fk) (return [])) k
+
+{- Doesn't type check. msplit is not polymorphic enough.
+interleave sg1 sg2 = do
+  r <- msplitL sg1
+  case r of
+    Nothing -> sg2
+    Just (a,sg1') ->
+      return a <+> interleave sg2 sg1'
+-}
 {-
 How do we catch computations which doesn't have error on the top?
 It doesn't work in mtl either, which is some consolation at least.
@@ -169,9 +325,126 @@ withError' t d (Cont f) = Cont $ \k k' -> f (\a k'' -> k a (\e -> k'' (ErrorT (d
 runError' :: Cont (Error' e r) a -> Cont r (Either e a)
 runError' (Cont f) = Cont $ \k -> f (\a k' -> k (Right a)) (\e -> k (Left (getE e)))
 
+lift :: Cont r a -> Cont (e -> r) a
+lift (Cont f) = Cont $ \k e -> f (\a -> k a e)
+
 {- This now doesn't type check. Success!
 unsafe' = flip runCont id $ runWriter $
           do tell "foo"
              set "bar"
              env
+-}
+
+-- Doing the overloading like this means we have the quadratic
+-- behaviour that's so unfortunate for all monad transformer libraries
+class ReaderM r where
+  type Env r
+  envC :: Cont r (Env r)
+
+instance ReaderM (ReaderT e -> r) where
+  type Env (ReaderT e -> r) = e
+  envC = env
+
+instance ReaderM r => ReaderM (StateT s -> r) where
+  type Env (StateT s -> r) = Env r
+  envC = lift envC
+
+instance ReaderM r => ReaderM (ErrorT e -> r) where
+  type Env (ErrorT e -> r) = Env r
+  envC = lift envC
+
+{-
+type family Env e r where
+  Env (ReaderT e) r = e
+  Env a (e -> r) = Env e r
+
+class ReaderM e r where
+  envC :: Cont (e -> r) (Env e r)
+
+instance ReaderM (ReaderT e) r where
+  envC = env
+
+instance (ReaderM e r,e :/~ (ReaderT q)) => ReaderM e (a -> r) where
+  envC = lift envC
+
+envChelp :: (ReaderM a r, e :/~ (ReaderT q)) => Cont (e -> a -> r) (Env a r)
+envChelp = lift envC
+
+The stuff below is from:
+https://stackoverflow.com/questions/6939043/is-it-possible-to-place-inequality-constraints-on-haskell-type-variables
+
+data Yes = Yes deriving (Show)
+data No = No deriving (Show)
+
+class (TypeEq x y No) => (:/~) x y
+instance (TypeEq x y No) => (:/~) x y
+
+class (TypeEq' () x y b) => TypeEq x y b where
+    typeEq :: x -> y -> b
+    maybeCast :: x -> Maybe y
+
+instance (TypeEq' () x y b) => TypeEq x y b where
+    typeEq x y = typeEq' () x y
+    maybeCast x = maybeCast' () x
+
+class TypeEq' q x y b | q x y -> b where
+    typeEq' :: q -> x -> y -> b
+    maybeCast' :: q -> x -> Maybe y
+
+instance (b ~ Yes) => TypeEq' () x x b where
+    typeEq' () _ _ = Yes
+    maybeCast' _ x = Just x
+
+instance (b ~ No) => TypeEq' q x y b where
+    typeEq' _ _ _ = No
+    maybeCast' _ _ = Nothing
+
+const' :: (a :/~ b) => a -> b -> a
+const' x _ = x
+-}
+{- This is a bit of type hackery to achieve type inequality
+   Unfortunately it doesn't work.
+   I added `TypeNeq a (ReaderT q)` to the context for the
+   ReaderM e (a -> r) instance but to no avail.
+
+data True
+data False
+
+type family TypeEqF a b where
+  TypeEqF a a = True
+  TypeEqF a b = False
+
+type TypeNeq a b = TypeEqF a b ~ False
+-}
+{- Apparently there is no such thing as closed data families
+data family TypeEqF a b where
+  TypeEqF a a = True
+  TypeEqF a b = False
+-}
+
+-- Testing the laziness of the state monad
+-- It is clearly strict.
+
+foo = flip runCont id $ flip runState 10 $ do
+    xs <- take 100 `fmap` sequence (repeat get)
+    set (last xs)
+
+
+-- Experiments with the continuations
+
+mapCont :: (r -> r) -> Cont r a -> Cont r a
+mapCont f (Cont h) = Cont $ \k -> f (h (\a -> f (k a)))
+
+mapCont2 :: (r -> r') -> (r' -> r) -> Cont r a -> Cont r' a
+mapCont2 f g (Cont h) = Cont $ \k -> f (h (\a -> g (k a)))
+
+{- This is never going to work because 'r' occurs both
+   positively and negatively in Cont
+bindCont :: Cont r a -> (r -> Cont s a) -> Cont s a
+bindCont (Cont f) g = Cont $ \k -> 
+-}
+
+{- Function inspired by Mauro's Monatron library. But I don't
+   know how to give it a sensible type in my framework.
+tmap :: Cont (e -> r) a -> Cont (e' -> r) a
 -}
