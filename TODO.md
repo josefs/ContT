@@ -9,6 +9,7 @@
 * Can I translate any monad to a monad transformer stack?
   What about the reverse?
 * Measurements. Agains mtl, transformers and algebraic effects
+  * Make versions of mtl and transformers which has inline pragmas
   * Against hand-rolled monad like Parsec
   * Try out the examples in the LogicT paper
   * Against hand-rolled which doesn't use continuations
@@ -79,3 +80,15 @@ uniform liftings of monad transformers.
 
 The question is what the difference is between Monatron and the
 extensible effects library of Oleg and c:o.
+
+## Elevator
+
+There is a library on Hackage, called elevator, which composes lifts
+automatically so that multiple lifts become unnecessary. It's quite a bit
+of complicated machinery to get it to work. My representation achieves
+the same thing automatically.
+
+Though I seem to recall that there should be a simpler way to achieve the
+same thing. But I can't remember now.
+
+http://hackage.haskell.org/package/elevator

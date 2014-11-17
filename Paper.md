@@ -86,7 +86,8 @@ type Reader e r = ReaderT e -> r
 
 # Measurements
 
-Compare with mtl, algebraic effects.
+Compare with mtl, algebraic effects. Compare also against mtl with inline
+pragmas.
 
 Measure performance of composed hierarchy vs hand-rolled monad. For
 instance Parsec.
