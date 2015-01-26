@@ -14,6 +14,8 @@ import Control.Monad
 
 import Data.Monoid
 
+import Control.Monad.ST
+
 -- Continuation monad
 
 newtype Cont r a = Cont { runCont :: ((a -> r) -> r) }
@@ -246,12 +248,13 @@ testCT = flip runCont id $ runError $ flip runStateCT 1 $
          (\e -> setCT 18)
 -}
 
-testCT = flip runCont id $ flip runStateCT 1 $ runError $
-         catchCT
+testCT = flip runCont id $ flip runStateCT 1 $ runError comp
+
+comp = catchCT
          (do s <- liftCT getCT
-             liftCT $ setCT 7
+             liftCT $ setCT (7 :: Integer)
              throwCT "foo")
-         (\e -> liftCT $ setCT 18)
+         (\e -> return ())
 
 testTell = flip runCont id $ runWriterCT $ tellCT "foo" >> tellCT "bar"
 
@@ -283,6 +286,9 @@ type Writer' w r = WriterT w -> r
 newtype ErrorT e = ErrorT { getE :: e }
 type Error' e r = (ErrorT e -> r) -> r
 
+newtype ListT r = ListT { getL :: r }
+type ListT' r = ListT r -> r
+
 tell :: Monoid w => w -> Cont (Writer' w r) ()
 tell w = Cont $ \k w' -> k () (WriterT $ getW w' <> w)
 
@@ -304,7 +310,7 @@ runState (Cont f) s = Cont $ \k -> f (\a s -> k (a,getS s)) (StateT s)
 env :: Cont (Reader' e r) e
 env = Cont $ \k r -> k (getR r) r
 
-local :: e -> Cont (Reader' e r) a -> Cont (Reader e r) a
+local :: e -> Cont (Reader' e r) a -> Cont (Reader' e r) a
 local e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') (ReaderT e)
 
 runReader :: Cont (Reader' e r) a -> e -> Cont r a
@@ -325,6 +331,23 @@ withError' t d (Cont f) = Cont $ \k k' -> f (\a k'' -> k a (\e -> k'' (ErrorT (d
 runError' :: Cont (Error' e r) a -> Cont r (Either e a)
 runError' (Cont f) = Cont $ \k -> f (\a k' -> k (Right a)) (\e -> k (Left (getE e)))
 
+combine :: Cont (ListT' r) a -> Cont (ListT' r) a -> Cont (ListT' r) a
+combine (Cont f) (Cont g) = Cont $ \k r -> f k (ListT (g k r))
+
+emptyListT :: Cont (ListT' r) a
+emptyListT = Cont $ \k r -> getL r
+
+{- Seems impossible to write!
+runListT' :: Cont (ListT' r) a -> Cont r [a]
+runListT' (Cont f) = Cont $ \k -> f (\a r -> k [a]) (ListT (k []))
+
+observeAll :: Cont (ListT' r) a -> Cont (ListT' r) [a]
+observeAll (Cont f) = Cont $ \k r -> f (\a r -> k [a] r) (ListT (k [] r))
+-}
+
+runListT' :: (forall r. Cont (ListT' r) a) -> [a]
+runListT' (Cont f) = flip runCont id $ Cont $ \k -> f (\a r -> a : getL r) (ListT (k []))
+
 lift :: Cont r a -> Cont (e -> r) a
 lift (Cont f) = Cont $ \k e -> f (\a -> k a e)
 
@@ -335,24 +358,61 @@ unsafe' = flip runCont id $ runWriter $
              env
 -}
 
+-- IO
+
+class IOM r where
+  liftIO :: IO a -> Cont r a
+
+instance IOM (IO r) where
+  liftIO m = Cont $ \k -> m >>= k
+
+instance IOM r => IOM (e -> r) where
+  liftIO m = lift (liftIO m)
+
+runIO :: (forall r. Cont (IO r) a) -> IO a
+runIO (Cont f) = f return
+
+class STM r where
+  type STP r
+  liftST :: ST (STP r) a -> Cont r a
+
+instance STM (ST s r) where
+  type STP (ST s r) = s
+  liftST m = Cont $ \k -> m >>= k
+
+instance STM r => STM (e -> r) where
+  type STP (e -> r) = STP r
+  liftST m = lift (liftST m)
+
+{- Polymorphism problems
+runSTT :: (forall s r. Cont (ST s r) a) -> a
+runSTT (Cont f) = runST (f return)
+-}
+
 -- Doing the overloading like this means we have the quadratic
 -- behaviour that's so unfortunate for all monad transformer libraries
 class ReaderM r where
   type Env r
   envC :: Cont r (Env r)
+  localC :: (Env r) -> Cont r a -> Cont r a
 
 instance ReaderM (ReaderT e -> r) where
   type Env (ReaderT e -> r) = e
   envC = env
+  localC = local
 
 instance ReaderM r => ReaderM (StateT s -> r) where
   type Env (StateT s -> r) = Env r
   envC = lift envC
+  localC e (Cont f) = Cont $ \k s -> runCont (localC e (Cont (\k' -> f (\a s -> k' a) s))) (\a -> k a s)
 
 instance ReaderM r => ReaderM (ErrorT e -> r) where
   type Env (ErrorT e -> r) = Env r
   envC = lift envC
-
+{-
+local :: e -> Cont (Reader' e r) a -> Cont (Reader e r) a
+local e (Cont f) = Cont $ \k e' -> f (\a _ -> k a e') (ReaderT e)
+-}
 {-
 type family Env e r where
   Env (ReaderT e) r = e
@@ -448,3 +508,4 @@ bindCont (Cont f) g = Cont $ \k ->
    know how to give it a sensible type in my framework.
 tmap :: Cont (e -> r) a -> Cont (e' -> r) a
 -}
+
