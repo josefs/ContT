@@ -112,3 +112,11 @@ setState s = Cont $ \k -> State $ \s_old -> unState (k s_old) s
 
 runState :: s -> Cont (State s m) a -> Cont m (s,a)
 runState s (Cont f) = Cont $ \k -> unState (f (\a -> State $ \s' -> k (s',a))) s
+
+-- ST
+
+conv :: (forall s. Cont (ST s) a) -> (forall s r. (a -> ST s r) -> ST s r)
+conv (Cont f) = f
+
+runSTT :: (forall s. Cont (ST s) a) -> a
+runSTT c = runST (conv c return)

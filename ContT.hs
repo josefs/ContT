@@ -384,10 +384,11 @@ instance STM r => STM (e -> r) where
   type STP (e -> r) = STP r
   liftST m = lift (liftST m)
 
-{- Polymorphism problems
+conv :: (forall s r. Cont (ST s r) a) -> (forall s r. (a -> ST s r) -> ST s r)
+conv (Cont f) = f
+
 runSTT :: (forall s r. Cont (ST s r) a) -> a
-runSTT (Cont f) = runST (f return)
--}
+runSTT c = runST (conv c return)
 
 -- Doing the overloading like this means we have the quadratic
 -- behaviour that's so unfortunate for all monad transformer libraries
