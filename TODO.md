@@ -10,7 +10,8 @@
   What about the reverse?
 * Measurements. Agains mtl, transformers and algebraic effects
   * Make versions of mtl and transformers which has inline pragmas
-  * Against hand-rolled monad like Parsec
+  * Against hand-rolled monad like Parsec,
+    or Parsek (Jean-Philippe's version)
   * Try out the examples in the LogicT paper
   * Against hand-rolled which doesn't use continuations
 * Implement all the variations, including overloading.
@@ -84,11 +85,22 @@ extensible effects library of Oleg and c:o.
 ## Elevator
 
 There is a library on Hackage, called elevator, which composes lifts
-automatically so that multiple lifts become unnecessary. It's quite a bit
-of complicated machinery to get it to work. My representation achieves
-the same thing automatically.
+automatically so that multiple lifts become unnecessary. It's quite a
+bit of complicated machinery to get it to work.
 
-Though I seem to recall that there should be a simpler way to achieve the
-same thing. But I can't remember now.
+My representation achieves the same thing automatically for lifting
+operations at the bottom of the stack. But if we're somewhere in the
+middle of the stack we need to lift the operation explicitly through
+the underlying layers.
+
+*TODO* write some examples here to illustrate
+
+Though I seem to recall that there should be a simpler way to achieve
+the same thing. But I can't remember now.
 
 http://hackage.haskell.org/package/elevator
+
+Roman Cheplyaka has done similar things in his library monad-classes.
+
+* http://ro-che.info/articles/extensible-effects
+* https://github.com/feuerbach/monad-classes
