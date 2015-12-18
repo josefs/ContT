@@ -4,6 +4,8 @@
   LogicT was very difficult. ListT should be easier. Where can
   I find an implementation which is OK.
 * What about the continuation effect? And delimited effects?
+  It should be possible to derive these from the continuation
+  hierarchy.
 * Should I be looking into Monad morphisms? I suppose I should
   be able to do something similar in my framework.
 * Can I translate any monad to a monad transformer stack?
@@ -23,7 +25,8 @@ Maybe:
 
 # Notes
 
-* These days, mtl depends on transformers
+* These days, mtl depends on transformers. mtl doesn't implement
+  any monads itself
 * transformers contains quite a lot of stuff, including:
   * functors and functor composition
   * applicative backwards and lift
@@ -48,7 +51,7 @@ argument to become thunks but a monad only takes care of transforming
 results.
 
 However, we live in Haskell, which is lazy, so maybe we don't have
-to create thunk from arguments...
+to create thunk from arguments... Though I doubt it will work.
 
 ## LogicT
 
@@ -81,6 +84,12 @@ uniform liftings of monad transformers.
 
 The question is what the difference is between Monatron and the
 extensible effects library of Oleg and c:o.
+
+However, there are several classes in Monatron which are usable
+without the algebraic effects stuff. He basically defines the normal
+monads and then have a correspondence with the algebraic effects
+version of them. He then uses the algebraic effects version to
+lift operations through the non-proper morphisms.
 
 ## Elevator
 
