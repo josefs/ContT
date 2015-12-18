@@ -17,6 +17,8 @@ import Control.Applicative
 import Control.Monad
 
 import Control.Monad.ST
+import Data.STRef (STRef)
+import qualified Data.STRef as S
 
 data Cont m a = Cont { runCont :: forall b. ((a -> m b) -> m b) }
 
@@ -115,8 +117,28 @@ runState s (Cont f) = Cont $ \k -> unState (f (\a -> State $ \s' -> k (s',a))) s
 
 -- ST
 
+-- ST doesn't have a lift function in the same sense as the other
+-- effect transformers above
+
+doST :: ST s a -> Cont (ST s) a
+doST m = Cont $ \k -> m >>= k
+
 conv :: (forall s. Cont (ST s) a) -> (forall s r. (a -> ST s r) -> ST s r)
 conv (Cont f) = f
 
 runSTT :: (forall s. Cont (ST s) a) -> a
 runSTT c = runST (conv c return)
+
+newSTRef :: a -> Cont (ST s) (STRef s a)
+newSTRef a = doST (S.newSTRef a)
+
+readSTRef :: STRef s a -> Cont (ST s) a
+readSTRef ref = doST (S.readSTRef ref)
+
+writeSTRef :: STRef s a -> a -> Cont (ST s) ()
+writeSTRef ref a = doST (S.writeSTRef ref a)
+
+modifySTRef :: STRef s a -> (a -> a) -> Cont (ST s) ()
+modifySTRef ref f = doST (S.modifySTRef ref f)
+modifySTRef' :: STRef s a -> (a -> a) -> Cont (ST s) ()
+modifySTRef' ref f = doST (S.modifySTRef' ref f)
